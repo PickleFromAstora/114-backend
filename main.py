@@ -1,113 +1,92 @@
 from typing import Optional, Annotated
-from fastapi import FastAPI, HTTPException, Depends, status
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from pydantic import BaseModel
-from datetime import datetime, timedelta
-from jose import JWTError, jwt
-
-# ----------------------------
-# 設定
-# ----------------------------
-SECRET_KEY = "supersecretkey123"  # 真實專案請用 env 變數
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
+from fastapi import FastAPI, Path
+from pydantic import BaseModel, Field
 
 app = FastAPI()
 
 # ----------------------------
-# 模擬使用者資料庫
+# 假資料庫
 # ----------------------------
-fake_users_db = {
-    "testuser": {
-        "username": "testuser",
-        "full_name": "Test User",
-        "email": "test@test.com",
-        "hashed_password": "fakehashedpassword",  # 實務請用 hash
-        "disabled": False,
-    }
-}
+fake_items_db = [
+    {"item_name": "foo", "price": 10.0, "tax": 1.0},
+    {"item_name": "bar", "price": 20.0, "tax": 2.0},
+    {"item_name": "baz", "price": 30.0, "tax": 3.0},
+]
 
 # ----------------------------
-# Pydantic Models
+# Model
 # ----------------------------
-class Token(BaseModel):
-    access_token: str
-    token_type: str
-
-class User(BaseModel):
-    username: str
-    email: Optional[str] = None
-    full_name: Optional[str] = None
-    disabled: Optional[bool] = None
-
-class UserInDB(User):
-    hashed_password: str
+class Item(BaseModel):
+    name: str
+    description: Optional[str] = Field(default=None, title="Item description", max_length=300)
+    price: Optional[float] = None
+    tax: Optional[float] = None
 
 # ----------------------------
-# OAuth2
+# 基本路由
 # ----------------------------
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+@app.get("/")
+async def root():
+    return {"message": "Hello world"}
+
+@app.get("/ping")
+async def ping():
+    return {"message": "pong"}
 
 # ----------------------------
-# 工具函數
+# 靜態路由，避免動態路由吃掉
 # ----------------------------
-def verify_password(plain_password, hashed_password):
-    # 實務要用真正 hash 驗證
-    return plain_password == "password" and hashed_password == "fakehashedpassword"
+@app.get("/items/names")
+async def get_item_names():
+    return [item["item_name"] for item in fake_items_db]
 
-def get_user(db, username: str):
-    if username in db:
-        user_dict = db[username]
-        return UserInDB(**user_dict)
-    return None
+@app.get("/items/prices")
+async def get_item_prices():
+    return [
+        {"item_name": item["item_name"], "total_price": item["price"] + item["tax"]}
+        for item in fake_items_db
+    ]
 
-def authenticate_user(db, username: str, password: str):
-    user = get_user(db, username)
-    if not user:
-        return False
-    if not verify_password(password, user.hashed_password):
-        return False
-    return user
+@app.get("/items/max-price")
+async def get_max_price():
+    max_price_item = max(fake_items_db, key=lambda x: x["price"])
+    return {"item_name": max_price_item["item_name"], "price": max_price_item["price"]}
 
-def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
-    to_encode = data.copy()
-    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=15))
-    to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-    return encoded_jwt
+@app.get("/items/min-price")
+async def get_min_price():
+    min_price_item = min(fake_items_db, key=lambda x: x["price"])
+    return {"item_name": min_price_item["item_name"], "price": min_price_item["price"]}
 
-async def get_current_user(token: str = Depends(oauth2_scheme)):
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="無效的認證",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        username: str = payload.get("sub")
-        if username is None:
-            raise credentials_exception
-    except JWTError:
-        raise credentials_exception
-    user = get_user(fake_users_db, username)
-    if user is None:
-        raise credentials_exception
-    return user
+@app.get("/items/avg-price")
+async def get_avg_price():
+    prices = [item["price"] for item in fake_items_db]
+    avg = sum(prices) / len(prices) if prices else 0
+    return {"average_price": avg}
 
 # ----------------------------
-# 登入 API
+# 動態路由
 # ----------------------------
-@app.post("/token", response_model=Token)
-async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
-    user = authenticate_user(fake_users_db, form_data.username, form_data.password)
-    if not user:
-        raise HTTPException(status_code=400, detail="帳號或密碼錯誤")
-    access_token = create_access_token(data={"sub": user.username})
-    return {"access_token": access_token, "token_type": "bearer"}
+@app.get("/items/id/{item_id}")
+async def read_item(item_id: Annotated[int, Path(ge=0, le=1000)]):
+    if item_id < len(fake_items_db):
+        return fake_items_db[item_id]
+    return {"error": "Item not found"}
 
-# ----------------------------
-# 測試受保護的 API
-# ----------------------------
-@app.get("/users/me")
-async def read_users_me(current_user: User = Depends(get_current_user)):
-    return current_user
+@app.get("/items/")
+async def read_items(skip: int = 0, limit: int = 10):
+    return fake_items_db[skip: skip + limit]
+
+@app.post("/items/")
+async def create_item(item: Item):
+    item_dict = item.model_dump()
+    if item.price is not None and item.tax is not None:
+        item_dict["price_with_tax"] = item.price + item.tax
+    fake_items_db.append(item_dict)
+    return item_dict
+
+@app.put("/items/id/{item_id}")
+async def update_item(item_id: Annotated[int, Path(ge=0, le=1000)], item: Item):
+    if item_id >= len(fake_items_db):
+        return {"error": "Item not found"}
+    fake_items_db[item_id].update(item.model_dump())
+    return fake_items_db[item_id]
