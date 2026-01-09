@@ -1,54 +1,102 @@
-print("🔥🔥🔥 RUNNING main.py 🔥🔥🔥")  # 確認程式被執行
+print("🔥🔥🔥 FASTAPI APP LOADED 🔥🔥🔥")
 
-from fastapi import FastAPI
-from pydantic import BaseModel
-from typing import List, Optional
+from fastapi import FastAPI, Path, Query
+from pydantic import BaseModel, Field
+from typing import Optional, List
 
 app = FastAPI()
 
-# ---------- 假資料 ----------
-items_db = [
-    {"name": "apple", "price": 10, "tax": 1},
-    {"name": "banana", "price": 20, "tax": 2},
-    {"name": "orange", "price": 15, "tax": 1.5},
+# --------------------
+# 假資料庫
+# --------------------
+fake_items_db = [
+    {"name": "apple", "price": 10.0, "tax": 1.0},
+    {"name": "banana", "price": 20.0, "tax": 2.0},
+    {"name": "orange", "price": 15.0, "tax": 1.5},
 ]
 
-# ---------- Model ----------
+# --------------------
+# Model
+# --------------------
 class Item(BaseModel):
-    name: str
-    price: float
+    name: str = Field(..., example="apple")
+    price: float = Field(..., gt=0)
     tax: Optional[float] = 0.0
 
-# ---------- 根路由 ----------
+# --------------------
+# 基本測試
+# --------------------
 @app.get("/")
 def root():
-    return {"message": "Hello world"}
+    return {"message": "API is running"}
 
 @app.get("/ping")
 def ping():
     return {"message": "pong"}
 
-# ---------- 靜態路由（一定要放在動態路由前） ----------
+# --------------------
+# 靜態路由（一定要放前面）
+# --------------------
+@app.get("/items/names")
+def get_item_names():
+    return [item["name"] for item in fake_items_db]
+
 @app.get("/items/prices")
 def get_item_prices():
     return [
-        {"name": item["name"], "total_price": item["price"] + item["tax"]}
-        for item in items_db
+        {
+            "name": item["name"],
+            "total_price": item["price"] + item["tax"]
+        }
+        for item in fake_items_db
     ]
 
-@app.get("/items/names")
-def get_item_names():
-    return [item["name"] for item in items_db]
+@app.get("/items/stats")
+def get_item_stats():
+    prices = [item["price"] for item in fake_items_db]
+    return {
+        "count": len(prices),
+        "total": sum(prices),
+        "average": sum(prices) / len(prices) if prices else 0,
+        "max": max(prices) if prices else 0,
+        "min": min(prices) if prices else 0,
+    }
 
-# ---------- 動態路由 ----------
+@app.get("/items/search")
+def search_items(keyword: str = Query(..., min_length=1)):
+    return [
+        item for item in fake_items_db
+        if keyword.lower() in item["name"].lower()
+    ]
+
+# --------------------
+# 動態路由
+# --------------------
+@app.get("/items/")
+def read_items(skip: int = 0, limit: int = 10):
+    return fake_items_db[skip: skip + limit]
+
 @app.get("/items/{item_id}")
-def read_item(item_id: int):
-    if 0 <= item_id < len(items_db):
-        return items_db[item_id]
-    return {"error": "Item not found"}
+def read_item(item_id: int = Path(..., ge=0)):
+    if item_id >= len(fake_items_db):
+        return {"error": "Item not found"}
+    return fake_items_db[item_id]
 
-# ---------- 建立新 item ----------
 @app.post("/items/")
 def create_item(item: Item):
-    items_db.append(item.dict())
-    return item.dict()
+    fake_items_db.append(item.model_dump())
+    return item
+
+@app.put("/items/{item_id}")
+def update_item(item_id: int, item: Item):
+    if item_id >= len(fake_items_db):
+        return {"error": "Item not found"}
+    fake_items_db[item_id] = item.model_dump()
+    return fake_items_db[item_id]
+
+@app.delete("/items/{item_id}")
+def delete_item(item_id: int):
+    if item_id >= len(fake_items_db):
+        return {"error": "Item not found"}
+    deleted = fake_items_db.pop(item_id)
+    return {"deleted": deleted}
